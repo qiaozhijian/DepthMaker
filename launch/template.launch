@@ -1,0 +1,17 @@
+<launch>
+    <!--- Sim Time -->
+    <param name="/use_sim_time" value="false" />
+    <rosparam command="load" file="$(find rgbd_inertial_slam)/config/template.yaml"/>
+    <arg name="bag" default=" /media/qzj/Extreme\ SSD/project_2022-11-10-00-42-01.bag"/>
+
+    <!--- TF -->
+    <node pkg="tf" type="static_transform_publisher" name="pandar_init_to_map"  args="0 0 0 0 0 0 /map /base_link 10" />
+<!--    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find rgbd_inertial_slam)/launch/default.rviz"></node>-->
+<!--    <node pkg="rgbd_inertial_slam" type="subs_pcl" name="subs_pcl" output="screen"/>-->
+    <node pkg="rgbd_inertial_slam" type="parse_rosbag.py" name="parse_rosbag" output="screen" args="--bag_file $(arg bag)"/>
+
+    <group if="$(eval optenv('/use_sim_time') == 'true')">
+        <node pkg="rosbag" type="play" output="log" name="rosbag" args=" --clock $(arg bag) -r 4 -s 0"/>
+    </group>
+
+</launch>
