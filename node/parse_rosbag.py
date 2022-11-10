@@ -29,6 +29,8 @@ if __name__ == '__main__':
     pub_cloud_pred = CloudPublisher(pcl_topic, frame='map')
     pub_pose = PosePublisher('/pose_world')
 
+    print(args)
+
     rate = rospy.Rate(10) # 10hz
     while not rospy.is_shutdown():
         Twc = np.eye(4)

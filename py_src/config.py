@@ -6,7 +6,7 @@ import argparse
 
 def get_config():
     parser = argparse.ArgumentParser(description='ROS package template')
-    parser.add_argument('--dataset_name', type=str, default='', help='the dataset name')
+    parser.add_argument('--bag_file', type=str, default='', help='the dataset name')
     parser.add_argument('--batch', type=int, default=32, help='batch_size')
 
     args, unknown = parser.parse_known_args()
