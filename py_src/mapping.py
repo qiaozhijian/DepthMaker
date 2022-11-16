@@ -51,8 +51,8 @@ class Mapping:
         self.new_bag_path = os.path.join(os.path.dirname(self.bag_path), bag_name + '_parsed.bag')
 
         self.vio = np.loadtxt(os.path.join(self.base_dir, 'vins_outputs', 'vio.csv'), delimiter=',', usecols=range(11))
-        self.cam_poses = self.I_to_C(self.vio, self.trans_i_c)
         self.loop_vio = np.loadtxt(os.path.join(self.base_dir, 'vins_outputs', 'vio_loop.csv'), delimiter=',', usecols=range(8))
+        self.cam_poses = self.I_to_C(self.loop_vio, self.trans_i_c)
 
         rospy.loginfo('config: {}'.format(self.config))
 
