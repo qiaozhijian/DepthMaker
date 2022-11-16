@@ -2,6 +2,8 @@ find_package(catkin REQUIRED COMPONENTS
         tf
         roscpp
         rospy
+        rosbag
+        camera_model
         )
 catkin_package()
 

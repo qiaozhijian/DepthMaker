@@ -23,8 +23,8 @@ include_directories(
 
 file(GLOB_RECURSE ALL_SRCS "src/*.cpp")
 
-add_executable(subs_pcl node/subs_pcl.cpp ${ALL_SRCS})
-target_link_libraries(subs_pcl ${ALL_TARGET_LIBRARIES})
+add_executable(gen_depth_dataset node/gen_depth_dataset.cpp ${ALL_SRCS})
+target_link_libraries(gen_depth_dataset ${ALL_TARGET_LIBRARIES})
 
 catkin_install_python(PROGRAMS
         node/parse_rosbag.py

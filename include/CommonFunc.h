@@ -22,6 +22,14 @@ namespace rgbd_inertial_slam {
 
     typedef Eigen::Matrix<double, 6, 1> Vector6d;
 
+    template <typename S>
+    inline Eigen::Matrix<S, 4, 4> MatFromArray(const std::vector<double> &v) {
+        Eigen::Matrix<S, 4, 4> m;
+        m << v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]
+                , v[9], v[10], v[11], v[12], v[13], v[14], v[15];
+        return m;
+    }
+
     template<typename PointT>
     inline void publishCLoudMsg(ros::Publisher &publisher,
                                 const pcl::PointCloud<PointT> &cloud,

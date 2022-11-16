@@ -12,7 +12,7 @@ using namespace std;
 ///////主函数
 int main(int argc, char **argv) {
 
-    ros::init(argc, argv, "subs_pcl");
+    ros::init(argc, argv, "gen_depth_dataset");
     ros::NodeHandle nh("~");
 
     google::InitGoogleLogging(argv[0]);
@@ -22,8 +22,6 @@ int main(int argc, char **argv) {
     FLAGS_log_prefix = true;
     FLAGS_logbufsecs = 0;
     FileManager::CreateDirectory(FLAGS_log_dir);
-
-    Config::readConfig();
 
     rgbd_inertial_slam::System system(nh);
 
