@@ -22,6 +22,43 @@ namespace rgbd_inertial_slam {
 
     typedef Eigen::Matrix<double, 6, 1> Vector6d;
 
+    inline Eigen::Vector3d R2ypr(const Eigen::Matrix3d &R)
+    {
+        Eigen::Vector3d n = R.col(0);
+        Eigen::Vector3d o = R.col(1);
+        Eigen::Vector3d a = R.col(2);
+
+        Eigen::Vector3d ypr(3);
+        double y = atan2(n(1), n(0));
+        double p = atan2(-n(2), n(0) * cos(y) + n(1) * sin(y));
+        double r = atan2(a(0) * sin(y) - a(1) * cos(y), -o(0) * sin(y) + o(1) * cos(y));
+        ypr(0) = y;
+        ypr(1) = p;
+        ypr(2) = r;
+
+        return ypr / M_PI * 180.0;
+    }
+
+    inline void SaveImgToTiff(const cv::Mat &img, const std::string &path) {
+        cv::Mat img_16bit;
+        img.convertTo(img_16bit, CV_16UC1);
+        cv::imwrite(path, img_16bit);
+    }
+
+    inline Eigen::Matrix4d InterpolatePose(const Eigen::Matrix4d &pose1, const Eigen::Matrix4d &pose2, double ratio){
+        // Interpolate the pose between pose1 and pose2, ratio is the ratio of pose2
+        assert(ratio >= 0 && ratio <= 1 && "ratio should be in [0, 1]");
+        Eigen::Matrix4d pose;
+        Eigen::Quaterniond q1(pose1.block<3, 3>(0, 0));
+        Eigen::Quaterniond q2(pose2.block<3, 3>(0, 0));
+        Eigen::Quaterniond q = q1.slerp(ratio, q2);
+        pose.block<3, 3>(0, 0) = q.toRotationMatrix();
+        pose.block<3, 1>(0, 3) = pose1.block<3, 1>(0, 3) * (1 - ratio) + pose2.block<3, 1>(0, 3) * ratio;
+        pose(3, 0) = pose(3, 1) = pose(3, 2) = 0;
+        pose(3, 3) = 1;
+        return pose;
+    }
+
     template <typename S>
     inline Eigen::Matrix<S, 4, 4> MatFromArray(const std::vector<double> &v) {
         Eigen::Matrix<S, 4, 4> m;

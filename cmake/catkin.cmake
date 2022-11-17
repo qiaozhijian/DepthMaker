@@ -4,6 +4,7 @@ find_package(catkin REQUIRED COMPONENTS
         rospy
         rosbag
         camera_model
+        cv_bridge
         )
 catkin_package()
 
