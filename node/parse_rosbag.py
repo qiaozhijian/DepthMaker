@@ -26,6 +26,7 @@ from py_src.config import get_config
 from py_src.ros_utils.image_utils import depth_msg_to_numpy, imgmsg_to_pil, depth2points, depth2xyzrgb, BackprojectDepth
 from py_src.ros_utils.listener import Listener
 from py_src.mapping import Mapping
+from py_src.ros_utils.image_utils import gene_cicle_mask
 
 def main():
 
@@ -39,4 +40,18 @@ def main():
 
 if __name__ == '__main__':
 
-    main()
+    xi, gamma1, gamma2, u0, v0 = 2.1082393261265553, 681.36801238322040, 681.65546755284, 388.92002493499103, 256.82920934103737
+
+    x, y, z = 1, 2, 5
+    x0 = x / (np.sqrt(x**2 + y**2 + z**2) + xi)
+    y0 = y / (np.sqrt(x**2 + y**2 + z**2) + xi)
+
+    print(x, y, z)
+
+    x = x0
+    y = y0
+    rho2_d = x0**2 + y0**2
+    z = 1 - xi * (rho2_d + 1) / (np.sqrt(1 + rho2_d*(1 - xi**2)) + xi)
+    print(x, y, z)
+
+    # main()

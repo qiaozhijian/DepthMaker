@@ -12,9 +12,6 @@ using namespace std;
 ///////主函数
 int main(int argc, char **argv) {
 
-    ros::init(argc, argv, "gen_depth_dataset");
-    ros::NodeHandle nh("~");
-
     google::InitGoogleLogging(argv[0]);
     FLAGS_log_dir = rgbd_inertial_slam::WORK_SPACE_PATH + "/Log";
     FLAGS_alsologtostderr = true;
@@ -23,9 +20,16 @@ int main(int argc, char **argv) {
     FLAGS_logbufsecs = 0;
     FileManager::CreateDirectory(FLAGS_log_dir);
 
-    rgbd_inertial_slam::System system(nh);
+    std::string config_file = "";
+    if(argc != 2){
+        LOG(ERROR)<<"Usage: ./try_mei_model path_to_config_file";
+        return 1;
+    }else{
+        config_file = argv[1];
+        LOG(INFO)<<"config file path: "<<argv[1];
+    }
 
-    ros::spin();
+    rgbd_inertial_slam::System system(config_file);
 
     return 0;
 }

@@ -31,6 +31,9 @@ file(GLOB_RECURSE ALL_SRCS "src/*.cpp")
 add_executable(gen_depth_dataset node/gen_depth_dataset.cpp ${ALL_SRCS})
 target_link_libraries(gen_depth_dataset ${ALL_TARGET_LIBRARIES})
 
+add_executable(try_mei_model node/try_mei_model.cpp ${ALL_SRCS})
+target_link_libraries(try_mei_model ${ALL_TARGET_LIBRARIES})
+
 catkin_install_python(PROGRAMS
         node/parse_rosbag.py
         DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

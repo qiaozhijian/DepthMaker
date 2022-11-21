@@ -1,9 +1,8 @@
 <launch>
     <!--- Sim Time -->
     <param name="/use_sim_time" value="false" />
-    <rosparam command="load" file="$(find rgbd_inertial_slam)/config/template.yaml"/>
+    <rosparam command="load" file="$(find rgbd_inertial_slam)/config/project_2022-11-12-23-13-10.yaml"/>
     <param name="/bag_path" type="str" value=" /media/qzj/Extreme SSD/datasets/CV_Project/trainning_data/project_2022-11-12-23-13-10.bag"/>
-<!--    <param name="/bag_path" type="str" value=" /media/qzj/Extreme SSD/project_2022-11-10-00-42-01.bag"/>-->
 
     <node pkg="rgbd_inertial_slam" type="gen_depth_dataset" name="gen_depth_dataset" output="screen"/>
 

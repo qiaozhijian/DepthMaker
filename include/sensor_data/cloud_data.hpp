@@ -18,7 +18,7 @@ struct PointXYZIR {
     PCL_ADD_POINT4D
 
     PCL_ADD_INTENSITY;
-    uint16_t ring;
+    std::uint16_t  ring;
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 } EIGEN_ALIGN16;
@@ -26,7 +26,7 @@ struct PointXYZIR {
 POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIR,
                                    (float, x, x)(float, y, y)
                                            (float, z, z)(float, intensity, intensity)
-                                           (uint16_t, ring, ring)
+                                           (std::uint16_t , ring, ring)
 )
 
 namespace rgbd_inertial_slam {

@@ -14,6 +14,14 @@ from PIL import Image
 from PIL import ImageOps
 from cv_bridge import CvBridge
 import torch.nn as nn
+import cv2
+
+def gene_cicle_mask(width, height, radius):
+    # 生成圆形mask
+    mask = np.ones((height, width), dtype=np.uint8) * 255
+    center = (width // 2, height // 2)
+    cv2.circle(mask, center, radius, 0, -1)
+    return mask
 
 def imgmsg_to_pil(img_msg, rgba=True):
     # ROS压缩图像格式转换为pil图像格式
