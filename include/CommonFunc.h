@@ -22,8 +22,28 @@ namespace rgbd_inertial_slam {
 
     typedef Eigen::Matrix<double, 6, 1> Vector6d;
 
-    inline Eigen::Vector3d R2ypr(const Eigen::Matrix3d &R)
-    {
+    inline void MergeDepthRGB(const cv::Mat &dep, const cv::Mat &rgb, cv::Mat &merge_img) {
+        cv::Mat dep_8u, dep_8u_color;
+        cv::normalize(dep, dep_8u, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+        cv::applyColorMap(dep_8u, dep_8u_color, cv::COLORMAP_RAINBOW);
+
+        merge_img = cv::Mat::zeros(rgb.rows, rgb.cols, CV_8UC3);
+        cv::Mat src_rgb = cv::Mat::zeros(rgb.rows, rgb.cols, CV_8UC3);
+        if (rgb.type() != CV_8UC3) {
+            cv::cvtColor(rgb, src_rgb, cv::COLOR_GRAY2BGR);
+        } else
+            src_rgb = rgb;
+        for (int i = 0; i < src_rgb.rows; ++i) {
+            for (int j = 0; j < src_rgb.cols; ++j) {
+                if (dep.at<float>(i, j) != 0) {
+                    merge_img.at<cv::Vec3b>(i, j) = dep_8u_color.at<cv::Vec3b>(i, j) * 0.5 + src_rgb.at<cv::Vec3b>(i, j) * 0.8;
+                } else
+                    merge_img.at<cv::Vec3b>(i, j) = src_rgb.at<cv::Vec3b>(i, j);
+            }
+        }
+    }
+
+    inline Eigen::Vector3d R2ypr(const Eigen::Matrix3d &R) {
         Eigen::Vector3d n = R.col(0);
         Eigen::Vector3d o = R.col(1);
         Eigen::Vector3d a = R.col(2);
@@ -45,7 +65,7 @@ namespace rgbd_inertial_slam {
         cv::imwrite(path, img_16bit);
     }
 
-    inline Eigen::Matrix4d InterpolatePose(const Eigen::Matrix4d &pose1, const Eigen::Matrix4d &pose2, double ratio){
+    inline Eigen::Matrix4d InterpolatePose(const Eigen::Matrix4d &pose1, const Eigen::Matrix4d &pose2, double ratio) {
         // Interpolate the pose between pose1 and pose2, ratio is the ratio of pose2
         assert(ratio >= 0 && ratio <= 1 && "ratio should be in [0, 1]");
         Eigen::Matrix4d pose;
@@ -59,7 +79,7 @@ namespace rgbd_inertial_slam {
         return pose;
     }
 
-    template <typename S>
+    template<typename S>
     inline Eigen::Matrix<S, 4, 4> MatFromArray(const std::vector<double> &v) {
         Eigen::Matrix<S, 4, 4> m;
         m << v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]
@@ -82,9 +102,9 @@ namespace rgbd_inertial_slam {
     inline Eigen::Matrix<T, 3, 3> skew(const Eigen::Matrix<T, 3, 1> &axis) {
         Eigen::Matrix<T, 3, 3> skew_matrix = Eigen::Matrix<T, 3, 3>::Identity();
 
-        skew_matrix<< 0, -axis(2,0), axis(1,0),
-                      axis(2,0), 0, -axis(0,0),
-                      -axis(1,0), axis(0,0), 0;
+        skew_matrix << 0, -axis(2, 0), axis(1, 0),
+                axis(2, 0), 0, -axis(0, 0),
+                -axis(1, 0), axis(0, 0), 0;
 
         return skew_matrix;
     }
@@ -109,8 +129,7 @@ namespace rgbd_inertial_slam {
     }
 
     template<typename T>
-    void toEulerAngle(const Eigen::Quaternion<T>& q, T& roll, T& pitch, T& yaw)
-    {
+    void toEulerAngle(const Eigen::Quaternion<T> &q, T &roll, T &pitch, T &yaw) {
 // roll (x-axis rotation)
         T sinr_cosp = 2.0 * (q.w() * q.x() + q.y() * q.z());
         T cosr_cosp = 1.0 - 2.0 * (q.x() * q.x() + q.y() * q.y());
@@ -213,14 +232,14 @@ namespace rgbd_inertial_slam {
         return rotation_matrix3;
     }
 
-    template <typename T>
-    inline Eigen::Matrix<T,4,4> EigenIsoInv(const Eigen::Matrix<T,4,4> &Tcw) {
-        Eigen::Matrix<T,3,3> Rcw = Tcw.block(0, 0, 3, 3);
-        Eigen::Matrix<T,3,1> tcw = Tcw.block(0, 3, 3, 1);
-        Eigen::Matrix<T,3,3> Rwc = Rcw.transpose();
-        Eigen::Matrix<T,3,1> twc = -Rwc * tcw;
+    template<typename T>
+    inline Eigen::Matrix<T, 4, 4> EigenIsoInv(const Eigen::Matrix<T, 4, 4> &Tcw) {
+        Eigen::Matrix<T, 3, 3> Rcw = Tcw.block(0, 0, 3, 3);
+        Eigen::Matrix<T, 3, 1> tcw = Tcw.block(0, 3, 3, 1);
+        Eigen::Matrix<T, 3, 3> Rwc = Rcw.transpose();
+        Eigen::Matrix<T, 3, 1> twc = -Rwc * tcw;
 
-        Eigen::Matrix<T,4,4> Twc = Eigen::Matrix<T,4,4>::Identity();
+        Eigen::Matrix<T, 4, 4> Twc = Eigen::Matrix<T, 4, 4>::Identity();
 
         Twc.block(0, 0, 3, 3) = Rwc;
         Twc.block(0, 3, 3, 1) = twc;
@@ -368,20 +387,21 @@ namespace rgbd_inertial_slam {
 
     }
 
-    inline void transformImuBase(const sensor_msgs::Imu imuIn, sensor_msgs::Imu &imuOut, Eigen::Matrix4f T)
-    {
-        Eigen::Matrix3f R = T.block<3,3>(0,0);
+    inline void transformImuBase(const sensor_msgs::Imu imuIn, sensor_msgs::Imu &imuOut, Eigen::Matrix4f T) {
+        Eigen::Matrix3f R = T.block<3, 3>(0, 0);
         tf::Quaternion orientation;
         tf::quaternionMsgToTF(imuIn.orientation, orientation);
-        Eigen::Quaternionf orientation_eigen(orientation.w(),orientation.x(),orientation.y(),orientation.z());
+        Eigen::Quaternionf orientation_eigen(orientation.w(), orientation.x(), orientation.y(), orientation.z());
         orientation_eigen = R * orientation_eigen.toRotationMatrix() * R.transpose();
 
-        Eigen::Vector3f linear_acceleration(imuIn.linear_acceleration.x,imuIn.linear_acceleration.y,imuIn.linear_acceleration.z);
-        Eigen::Vector3f angular_velocity(imuIn.angular_velocity.x,imuIn.angular_velocity.y,imuIn.angular_velocity.z);
+        Eigen::Vector3f linear_acceleration(imuIn.linear_acceleration.x, imuIn.linear_acceleration.y,
+                                            imuIn.linear_acceleration.z);
+        Eigen::Vector3f angular_velocity(imuIn.angular_velocity.x, imuIn.angular_velocity.y, imuIn.angular_velocity.z);
         angular_velocity = R * angular_velocity;
         linear_acceleration = R * linear_acceleration;
 
-        orientation = tf::Quaternion(orientation_eigen.x(), orientation_eigen.y(), orientation_eigen.z(), orientation_eigen.w());
+        orientation = tf::Quaternion(orientation_eigen.x(), orientation_eigen.y(), orientation_eigen.z(),
+                                     orientation_eigen.w());
         tf::quaternionTFToMsg(orientation, imuOut.orientation);
         imuOut.header = imuIn.header;
         imuOut.angular_velocity.x = angular_velocity[0];
@@ -395,7 +415,7 @@ namespace rgbd_inertial_slam {
     }
 
     inline CloudData::CLOUD_PTR transformPointCloud(const CloudData::CLOUD_PTR cloudIn, CloudData::CLOUD_PTR cloudOut,
-                                                       const Eigen::Matrix4f transformIn) {
+                                                    const Eigen::Matrix4f transformIn) {
 
         CloudData::POINT *pointFrom;
         CloudData::POINT pointTo;
@@ -421,10 +441,8 @@ namespace rgbd_inertial_slam {
             output_temp.header = cloudIn->header;
             output_temp.sensor_origin_ = cloudIn->sensor_origin_;
             output_temp.sensor_orientation_ = cloudIn->sensor_orientation_;
-            pcl::copyPointCloud (output_temp, *cloudOut);   //output_temp类型 pcl::PointCloud<POINT>;
-        }
-        else
-        {
+            pcl::copyPointCloud(output_temp, *cloudOut);   //output_temp类型 pcl::PointCloud<POINT>;
+        } else {
             cloudOut->clear();
             cloudOut->resize(cloudSize);
             for (int i = 0; i < cloudSize; ++i) {
