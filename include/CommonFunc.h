@@ -17,10 +17,50 @@
 #include "sensor_data/cloud_data.hpp"
 #include <geometry_msgs/PoseStamped.h>
 #include <opencv2/opencv.hpp>
+#include <cv_bridge/cv_bridge.h>
 
 namespace rgbd_inertial_slam {
 
     typedef Eigen::Matrix<double, 6, 1> Vector6d;
+
+// convert from pcl point to eigen
+    template <typename T, int dim, typename PointType>
+    inline Eigen::Matrix<T, dim, 1> ToEigen(const PointType& pt) {
+        return Eigen::Matrix<T, dim, 1>(pt.x, pt.y, pt.z);
+    }
+
+    template <>
+    inline Eigen::Matrix<float, 3, 1> ToEigen<float, 3, pcl::PointXYZ>(const pcl::PointXYZ& pt) {
+        return pt.getVector3fMap();
+    }
+
+    template <>
+    inline Eigen::Matrix<float, 3, 1> ToEigen<float, 3, pcl::PointXYZI>(const pcl::PointXYZI& pt) {
+        return pt.getVector3fMap();
+    }
+
+    inline cv::Mat GetDepthFromImage(const sensor_msgs::ImageConstPtr &depth_msg, double depth_scale) {
+        cv_bridge::CvImageConstPtr depth_ptr;
+        // debug use     std::cout<<depth_msg->encoding<<std::endl;
+        sensor_msgs::Image img;
+        img.header = depth_msg->header;
+        img.height = depth_msg->height;
+        img.width = depth_msg->width;
+        img.is_bigendian = depth_msg->is_bigendian;
+        img.step = depth_msg->step;
+        img.data = depth_msg->data;
+        img.encoding = sensor_msgs::image_encodings::MONO16;
+        depth_ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO16);
+        cv::Mat depth = depth_ptr->image;
+        cv::Mat depth_32f;
+        depth.convertTo(depth_32f, CV_32FC1, depth_scale);
+        return depth_32f;
+    }
+
+    inline cv::Mat GetImageFromCompressed(const sensor_msgs::CompressedImageConstPtr &img_msg) {
+        cv_bridge::CvImageConstPtr cv_ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
+        return cv_ptr->image;
+    }
 
     inline void MergeDepthRGB(const cv::Mat &dep, const cv::Mat &rgb, cv::Mat &merge_img) {
         cv::Mat dep_8u, dep_8u_color;
