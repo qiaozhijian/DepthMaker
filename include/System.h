@@ -24,6 +24,7 @@
 
 #include <pcl/common/transforms.h>
 #include <pcl/point_types.h>
+#include <pcl/filters/crop_box.h>
 
 typedef pcl::PointXYZI PointType;
 
@@ -94,8 +95,8 @@ namespace rgbd_inertial_slam {
             std::vector<Eigen::Matrix4d, Eigen::aligned_allocator<Eigen::Matrix4d>> pose_map;
             load_csv_r3live(traj_path, pose_map);
             std::string pcd_path = r3live_path_ + "/rgb_pt.pcd";
-            pcl::PointCloud<pcl::PointXYZRGBA>::Ptr pcd_ptr(new pcl::PointCloud<pcl::PointXYZRGBA>());
-            pcl::io::loadPCDFile(pcd_path, *pcd_ptr);
+            pcl::PointCloud<pcl::PointXYZRGBA>::Ptr global_map_ptr(new pcl::PointCloud<pcl::PointXYZRGBA>());
+            pcl::io::loadPCDFile(pcd_path, *global_map_ptr);
 
             Ex_vec_.clear();
             Eigen::Matrix4d Ex_0c = Eigen::Matrix4d::Identity();
@@ -112,13 +113,28 @@ namespace rgbd_inertial_slam {
             }
 
             tmp_omni_ptr_.reset(new pcl::PointCloud<PointType>());
-            std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&pose_map, &pcd_ptr, this](size_t i) {
+            std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&pose_map, &global_map_ptr, this](size_t i) {
                 Eigen::Matrix4d pose = pose_map[i];
 //                add random yaw
                 double rand01 = (double) rand() / RAND_MAX;
                 pose.block<3,3>(0,0) = pose.block<3,3>(0,0) * Eigen::AngleAxisd(M_PI / 2.0 * rand01, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+//                pcl box filter
+                pcl::PointCloud<pcl::PointXYZRGBA>::Ptr local_map_ptr(new pcl::PointCloud<pcl::PointXYZRGBA>());
+                pcl::CropBox<pcl::PointXYZRGBA> box_filter;
+                Eigen::Vector4f min_pt, max_pt;
+                double box_size = 100.0;
+                min_pt << pose(0, 3) - box_size, pose(1, 3) - box_size, pose(2, 3) - box_size, 1;
+                max_pt << pose(0, 3) + box_size, pose(1, 3) + box_size, pose(2, 3) + box_size, 1;
+                box_filter.setMin(min_pt);
+                box_filter.setMax(max_pt);
+                box_filter.setInputCloud(global_map_ptr);
+                box_filter.filter(*local_map_ptr);
+                if (local_map_ptr->size() == 0) {
+                    return;
+                }
+
                 pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp_map(new pcl::PointCloud<pcl::PointXYZRGBA>());
-                pcl::transformPointCloud(*pcd_ptr, *tmp_map, EigenIsoInv(pose));
+                pcl::transformPointCloud(*local_map_ptr, *tmp_map, EigenIsoInv(pose));
                 std::vector<cv::Mat> rgb_vec, depth_vec;
                 double height_res = 0.5625;
                 double width_res = 0.5625;
