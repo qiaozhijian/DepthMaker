@@ -18,6 +18,9 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <opencv2/opencv.hpp>
 #include <cv_bridge/cv_bridge.h>
+#include "camodocal/camera_models/CameraFactory.h"
+#include "camodocal/camera_models/CataCamera.h"
+#include "camodocal/camera_models/PinholeCamera.h"
 
 namespace rgbd_inertial_slam {
 
@@ -57,9 +60,47 @@ namespace rgbd_inertial_slam {
         return depth_32f;
     }
 
+    inline void Depth2Points(const cv::Mat &depth, const pcl::PointCloud<pcl::PointXYZI>::Ptr &points, const camodocal::CameraPtr &model_ptr) {
+        points->clear();
+        for (int i = 0; i < depth.rows; ++i) {
+            for (int j = 0; j < depth.cols; ++j) {
+                float d = depth.at<float>(i, j);
+                if (d > 0.1) {
+                    Eigen::Vector3d p_cam;
+                    model_ptr->liftProjective(Eigen::Vector2d(j, i), p_cam);
+                    p_cam = p_cam * d / p_cam(2);
+                    pcl::PointXYZI p;
+                    p.getVector3fMap() = p_cam.cast<float>();
+                    points->push_back(p);
+                }
+            }
+        }
+    }
+
     inline cv::Mat GetImageFromCompressed(const sensor_msgs::CompressedImageConstPtr &img_msg) {
         cv_bridge::CvImageConstPtr cv_ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
         return cv_ptr->image;
+    }
+
+    inline cv::Mat GetImageFromImage(const sensor_msgs::ImageConstPtr &img_msg) {
+        cv_bridge::CvImageConstPtr ptr;
+        if (img_msg->encoding == "8UC1")
+        {
+            sensor_msgs::Image img;
+            img.header = img_msg->header;
+            img.height = img_msg->height;
+            img.width = img_msg->width;
+            img.is_bigendian = img_msg->is_bigendian;
+            img.step = img_msg->step;
+            img.data = img_msg->data;
+            img.encoding = "mono8";
+            ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+        }
+        else
+            ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
+
+        cv::Mat img = ptr->image.clone();
+        return img;
     }
 
     inline void MergeDepthRGB(const cv::Mat &dep, const cv::Mat &rgb, cv::Mat &merge_img) {

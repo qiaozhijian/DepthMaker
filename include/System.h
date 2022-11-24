@@ -25,6 +25,7 @@
 #include <pcl/common/transforms.h>
 #include <pcl/point_types.h>
 
+typedef pcl::PointXYZI PointType;
 
 namespace rgbd_inertial_slam {
 
@@ -33,16 +34,18 @@ namespace rgbd_inertial_slam {
     private:
 
         std::string fisheye_topic_, depth_topic_, rs_rgb_topic_;
-        std::string vins_path_, gt_dataset_path_, omni_path_, rs_dep_rgb_path_;
+        std::string vins_path_, gt_dataset_path_, omni_path_, rs_dep_rgb_path_, points_path_, r3live_path_, r3_omni_depth_path_;
         std::vector<std::string> image_paths, depth_paths, dep_rgb_path_;
+        std::vector<std::string> r3_image_paths, r3_depth_paths, r3_depth_vis_paths, r3_dep_rgb_path_;
         std::vector<Eigen::Matrix4d, Eigen::aligned_allocator<Eigen::Matrix4d>> Ex_vec_;
+        Eigen::Matrix4d Ex_10_, Ex_21_, Ex_32_;
         Eigen::Matrix4d Tic_;
         double depth_scale_;
 
         camodocal::CameraPtr m_camera0, m_camera1, m_camera2, m_camera3, m_rgbd_model_;
         std::vector<camodocal::CameraPtr> m_camera_vec;
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr map_ptr_, tmp_omni_ptr_;
+        pcl::PointCloud<PointType>::Ptr map_ptr_, tmp_omni_ptr_;
 
         std::map<double, Eigen::Matrix4d> pose_map_;
         std::vector<double> time_vec_;
@@ -71,13 +74,14 @@ namespace rgbd_inertial_slam {
 
             LoadParameters();
 
-            InitBag();
+//            InitBag();
 
-            if(!use_map_){
-                Depth2Points();
-            }
-
-            TravelBag();
+            GenVirtualDataset();
+//            if(!use_map_ && debug_){
+//                ReGenMap();
+//            }
+//
+//            TravelBag();
         }
 
         // subscriber
@@ -85,96 +89,158 @@ namespace rgbd_inertial_slam {
 
     private:
 
-        void Depth2Points(){
-            rosbag::View::iterator view_it = view_->begin(); //使用迭代器的方式遍历
-            while (view_it != view_->end()) {
-                auto m = *view_it;
-                std::string cur_topic = m.getTopic();
-                //interpolate pose
-                double cur_time = m.getTime().toSec();
-                Eigen::Matrix4d cur_pose = Eigen::Matrix4d::Identity();
-                auto it = lower_bound(time_vec_.begin(), time_vec_.end(), cur_time);
-                bool pose_available = false;
-                if (it != time_vec_.end() && it != time_vec_.begin()) {
-                    double upper_t = *it;
-                    double lower_t = *(it - 1);
-                    if (abs(upper_t - lower_t) < 1.0){
-                        pose_available = true;
-                        double ratio = (cur_time - lower_t) / (upper_t - lower_t);
-                        cur_pose = InterpolatePose(pose_map_[lower_t], pose_map_[upper_t], ratio);
-                    }
-                }
-                if (cur_topic == "/camera/aligned_depth_to_color/image_raw" && pose_available) {
-                    sensor_msgs::ImageConstPtr img_msg = m.instantiate<sensor_msgs::Image>();
-                    cv::Mat depth = GetDepthFromImage(img_msg, depth_scale_);
-                    pcl::PointCloud<pcl::PointXYZ>::Ptr tmp_map_ptr_(new pcl::PointCloud<pcl::PointXYZ>());
-                    for (int i = 0; i < depth.rows; ++i) {
-                        for (int j = 0; j < depth.cols; ++j) {
-                            float d = depth.at<float>(i, j);
-                            if (d > 0.1) {
-                                Eigen::Vector3d p_cam;
-                                m_rgbd_model_->liftProjective(Eigen::Vector2d(j, i), p_cam);
-                                p_cam = p_cam * d / p_cam(2);
-                                Eigen::Vector3d p_w = cur_pose.block<3, 3>(0, 0) * p_cam + cur_pose.block<3, 1>(0, 3);
-                                pcl::PointXYZ p(p_w(0), p_w(1), p_w(2));
-                                tmp_map_ptr_->push_back(p);
+        void GenVirtualDataset() {
+            std::string traj_path = r3live_path_ + "/trajectory.txt";
+            std::vector<Eigen::Matrix4d, Eigen::aligned_allocator<Eigen::Matrix4d>> pose_map;
+            load_csv_r3live(traj_path, pose_map);
+            std::string pcd_path = r3live_path_ + "/rgb_pt.pcd";
+            pcl::PointCloud<pcl::PointXYZRGBA>::Ptr pcd_ptr(new pcl::PointCloud<pcl::PointXYZRGBA>());
+            pcl::io::loadPCDFile(pcd_path, *pcd_ptr);
+
+            Ex_vec_.clear();
+            Eigen::Matrix4d Ex_0c = Eigen::Matrix4d::Identity();
+            Ex_0c.block<3, 3>(0, 0) = Eigen::AngleAxisd(M_PI / 2, Eigen::Vector3d::UnitX()).toRotationMatrix();
+            Ex_vec_.push_back(Ex_0c);
+            Ex_vec_.push_back(Ex_10_ * Ex_0c);
+            Ex_vec_.push_back(Ex_21_ * Ex_10_ * Ex_0c);
+            Ex_vec_.push_back(Ex_32_ * Ex_21_ * Ex_10_ * Ex_0c);
+
+            std::vector<size_t> index;
+            int step = 2;
+            for (int i = 0; i < pose_map.size() / step; i++) {
+                index.push_back(i * step);
+            }
+
+            tmp_omni_ptr_.reset(new pcl::PointCloud<PointType>());
+            std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&pose_map, &pcd_ptr, this](size_t i) {
+                Eigen::Matrix4d pose = pose_map[i];
+//                add random yaw
+                double rand01 = (double) rand() / RAND_MAX;
+                pose.block<3,3>(0,0) = pose.block<3,3>(0,0) * Eigen::AngleAxisd(M_PI / 2.0 * rand01, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+                pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp_map(new pcl::PointCloud<pcl::PointXYZRGBA>());
+                pcl::transformPointCloud(*pcd_ptr, *tmp_map, EigenIsoInv(pose));
+                std::vector<cv::Mat> rgb_vec, depth_vec;
+                double height_res = 0.5625;
+                double width_res = 0.5625;
+                cv::Mat omni_depth_ = cv::Mat::zeros(180.0 / height_res, 360.0 / width_res, CV_32FC1);
+
+                for (int j = 0; j < 4; ++j) {
+                    pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp_map_fisheye(new pcl::PointCloud<pcl::PointXYZRGBA>());
+                    pcl::transformPointCloud(*tmp_map, *tmp_map_fisheye, Ex_vec_[j]);
+                    cv::Mat rgb = cv::Mat::zeros(m_camera0->imageHeight(), m_camera0->imageWidth(),
+                                                 CV_8UC3);
+                    cv::Mat depth = cv::Mat::zeros(m_camera0->imageHeight(), m_camera0->imageWidth(),
+                                                   CV_32FC1);
+                    for (int k = 0; k < tmp_map_fisheye->points.size(); ++k) {
+                        pcl::PointXYZRGBA p = tmp_map_fisheye->points[k];
+                        Eigen::Vector3d p3d(p.x, p.y, p.z);
+                        if (p3d(2) > 0.1) {
+                            Eigen::Vector2d p2d;
+                            m_camera_vec[j]->spaceToPlane(p3d, p2d);
+                            if (p2d[0] < 0 || p2d[0] >= m_camera_vec[j]->imageWidth() || p2d[1] < 0 ||
+                                p2d[1] >= m_camera_vec[j]->imageHeight())
+                                continue;
+                            int u = p2d[0], v = p2d[1];
+                            if (depth.at<float>(v, u) == 0 || depth.at<float>(v, u) > p3d[2]) {
+                                depth.at<float>(v, u) = p3d[2];
+                                rgb.at<cv::Vec3b>(v, u) = cv::Vec3b(p.b, p.g, p.r);
+                            }
+                        }
+
+                        if(j==0){
+                            double r = p3d.norm();
+                            double theta = atan2(-p3d(1), sqrt(p3d(0) * p3d(0) + p3d(2) * p3d(2)));
+                            double phi = atan2(p3d(2), p3d(0));
+                            int row = (theta + M_PI / 2.0) * 180.0 / M_PI / height_res;
+                            int col = (phi + M_PI) * 180.0 / M_PI / width_res;
+                            if (row >= 0 && row < omni_depth_.rows && col >= 0 && col < omni_depth_.cols) {
+                                if (omni_depth_.at<float>(row, col) == 0 || omni_depth_.at<float>(row, col) > r) {
+                                    omni_depth_.at<float>(row, col) = r;
+                                }
                             }
                         }
                     }
-                    map_ptr_->clear();
-                    pcl::copyPointCloud(*tmp_map_ptr_, *map_ptr_);
-                    break;
+                    rgb_vec.push_back(rgb);
+                    depth_vec.push_back(depth);
                 }
-                view_it++;
-            }
-        }
-
-        void TravelBag() {
-            rosbag::View::iterator view_it = view_->begin(); //使用迭代器的方式遍历
-            while (view_it != view_->end()) {
-                auto m = *view_it;
-                std::string cur_topic = m.getTopic();
-                //interpolate pose
-                double cur_time = m.getTime().toSec();
-                Eigen::Matrix4d cur_pose = Eigen::Matrix4d::Identity();
-                auto it = lower_bound(time_vec_.begin(), time_vec_.end(), cur_time);
-                bool pose_available = false;
-                if (it != time_vec_.end() && it != time_vec_.begin()) {
-                    double upper_t = *it;
-                    double lower_t = *(it - 1);
-                    if (abs(upper_t - lower_t) < 1.0){
-                        pose_available = true;
-                        double ratio = (cur_time - lower_t) / (upper_t - lower_t);
-                        cur_pose = InterpolatePose(pose_map_[lower_t], pose_map_[upper_t], ratio);
+                std::string i_s = std::to_string(i);
+                while (i_s.size() < 6) {
+                    i_s = "0" + i_s;
+                }
+                for (int j = 0; j < 4; ++j) {
+                    cv::Mat rgb = rgb_vec[j];
+                    cv::imwrite(r3_image_paths[j] + "/" + i_s + ".png", rgb);
+                    if(debug_) {
+                        cv::Mat depth = depth_vec[j];
+                        cv::imwrite(r3_depth_paths[j] + "/" + i_s + ".tiff", depth);
+                        cv::imwrite(r3_depth_vis_paths[j] + "/" + i_s + ".png", depth * 10);
+                        cv::Mat merge_img = cv::Mat::zeros(rgb.rows, rgb.cols, CV_8UC3);
+                        MergeDepthRGB(depth, rgb, merge_img);
+                        cv::imwrite(r3_dep_rgb_path_[j] + "/" + i_s + ".png", merge_img);
                     }
                 }
+                cv::imwrite(r3_omni_depth_path_ + "/" + i_s + ".tiff", omni_depth_);
+                LOG(INFO) << "Gen " << i << " / " << pose_map.size() << " at " << pose_map[i].block<3, 1>(0, 3).transpose();
+                if(debug_){
+                    ReGenDepthUsingOmni(omni_depth_, i_s);
+                }
+            });
+        }
 
-                if (cur_topic == fisheye_topic_ && pose_available) {
-                    if (it != time_vec_.end() && it != time_vec_.begin()) {
-                        std::vector<cv::Mat> img_vec;
-                        std::vector<cv::Mat> dep_vec;
-                        sensor_msgs::CompressedImageConstPtr img_msg = m.instantiate<sensor_msgs::CompressedImage>();
-                        SaveIndividualImage(img_msg, cur_time, img_vec);
-                        SaveOmniImage(cur_pose, cur_time, 0.5625, 0.5625);
-                        LOG(INFO) << std::fixed << "Write image at " << cur_time;
+        void ReGenDepthUsingOmni(const cv::Mat &omni_depth_, const std::string i_s){
 
-                        if(debug_){
-                            SaveIndividualDepth(cur_pose, cur_time, dep_vec);
-                            SaveRGBWithDepth(img_vec, dep_vec, cur_time);
-                            ReProjectUsingOmni(cur_pose, cur_time);
+            pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp_omni(new pcl::PointCloud<pcl::PointXYZRGBA>());
+            GenPCLfromOmni(omni_depth_, tmp_omni);
+            std::vector<Eigen::Matrix4d, Eigen::aligned_allocator<Eigen::Matrix4d>> Ex_vec_fisheye;
+            Ex_vec_fisheye.push_back(Eigen::Matrix4d::Identity());
+            Ex_vec_fisheye.push_back(Ex_10_);
+            Ex_vec_fisheye.push_back(Ex_21_ * Ex_10_);
+            Ex_vec_fisheye.push_back(Ex_32_ * Ex_21_ * Ex_10_);
+            std::vector<cv::Mat> depth_vec;
+            for (int j = 0; j < 4; ++j) {
+                pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp_map_fisheye(new pcl::PointCloud<pcl::PointXYZRGBA>());
+                pcl::transformPointCloud(*tmp_omni, *tmp_map_fisheye, Ex_vec_fisheye[j]);
+                cv::Mat depth = cv::Mat::zeros(m_camera0->imageHeight(), m_camera0->imageWidth(),
+                                               CV_32FC1);
+                for (int k = 0; k < tmp_map_fisheye->points.size(); ++k) {
+                    pcl::PointXYZRGBA p = tmp_map_fisheye->points[k];
+                    Eigen::Vector3d p3d(p.x, p.y, p.z);
+                    if (p3d(2) > 0.1) {
+                        Eigen::Vector2d p2d;
+                        m_camera_vec[j]->spaceToPlane(p3d, p2d);
+                        if (p2d[0] < 0 || p2d[0] >= m_camera_vec[j]->imageWidth() || p2d[1] < 0 ||
+                            p2d[1] >= m_camera_vec[j]->imageHeight())
+                            continue;
+                        int u = p2d[0], v = p2d[1];
+                        if (depth.at<float>(v, u) == 0 || depth.at<float>(v, u) > p3d[2]) {
+                            depth.at<float>(v, u) = p3d[2];
                         }
                     }
                 }
-
-                if (cur_topic == rs_rgb_topic_ && debug_ && pose_available) {
-                    sensor_msgs::CompressedImagePtr img_msg = m.instantiate<sensor_msgs::CompressedImage>();
-                    cv::Mat rgb_img = GetImageFromCompressed(img_msg);
-                    SaveRsRGBWithDepth(rgb_img, cur_time, cur_pose);
-                }
-
-                view_it++;
+                depth_vec.push_back(depth);
             }
-            bag_.close();
+            for (int j = 0; j < 4; ++j) {
+                cv::Mat depth = depth_vec[j];
+                cv::imwrite(r3_depth_vis_paths[j] + "/" + i_s + "_re.png", depth * 10);
+            }
+        }
+
+        void GenPCLfromOmni(const cv::Mat &depth, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr &pcd_ptr) {
+            pcd_ptr->clear();
+            double height_res = 0.5625;
+            double width_res = 0.5625;
+            for (int row = 0; row < depth.rows; ++row) {
+                for (int col = 0; col < depth.cols; ++col) {
+                    double r = depth.at<float>(row, col);
+                    pcl::PointXYZRGBA p;
+                    double theta = row * height_res * M_PI / 180.0 - M_PI / 2.0;
+                    double phi = col * width_res * M_PI / 180.0 - M_PI;
+                    p.x = r * cos(theta) * cos(phi);
+                    p.y = -r * sin(theta);
+                    p.z = r * cos(theta) * sin(phi);
+                    pcd_ptr->push_back(p);
+                }
+            }
         }
 
         void LoadParameters() {
@@ -186,25 +252,27 @@ namespace rgbd_inertial_slam {
             load_csv(vins_path_ + "/vins_result_loop.csv", pose_map_, time_vec_);
             LOG(INFO) << "package_path: " << vins_path_;
             if (use_map_) {
-                Tic_ = MatFromArray<double>(config_node_["l515"]["body_T_cam0"].as<std::vector<double>>());
-                map_ptr_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+                map_ptr_.reset(new pcl::PointCloud<PointType>());
                 pcl::io::loadPCDFile(vins_path_ + "/map.pcd", *map_ptr_);
-            } else{
-                Tic_ = Eigen::Matrix4d::Identity();
-                map_ptr_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+            } else {
+                map_ptr_.reset(new pcl::PointCloud<PointType>());
             }
-            Eigen::Matrix4d Ex_10 = MatFromArray<double>(config_node_["Ex_10"].as<std::vector<double>>());
-            Eigen::Matrix4d Ex_21 = MatFromArray<double>(config_node_["Ex_21"].as<std::vector<double>>());
-            Eigen::Matrix4d Ex_32 = MatFromArray<double>(config_node_["Ex_32"].as<std::vector<double>>());
+            Tic_ = MatFromArray<double>(config_node_["l515"]["body_T_cam0"].as<std::vector<double>>());
+            for (auto pose_it = pose_map_.begin(); pose_it != pose_map_.end(); ++pose_it) {
+                pose_it->second = pose_it->second * Tic_;
+            }
+            Ex_10_ = MatFromArray<double>(config_node_["Ex_10"].as<std::vector<double>>());
+            Ex_21_ = MatFromArray<double>(config_node_["Ex_21"].as<std::vector<double>>());
+            Ex_32_ = MatFromArray<double>(config_node_["Ex_32"].as<std::vector<double>>());
             Eigen::Matrix4d Ex_c2 = MatFromArray<double>(config_node_["Ex_c2"].as<std::vector<double>>());
-            Eigen::Matrix4d Ex_c1 = Ex_c2 * Ex_21;
-            Eigen::Matrix4d Ex_c0 = Ex_c1 * Ex_10;
-            Eigen::Matrix4d Ex_c3 = Ex_c2 * EigenIsoInv(Ex_32);
+            Eigen::Matrix4d Ex_c1 = Ex_c2 * Ex_21_;
+            Eigen::Matrix4d Ex_c0 = Ex_c1 * Ex_10_;
+            Eigen::Matrix4d Ex_c3 = Ex_c2 * EigenIsoInv(Ex_32_);
 
-            Ex_vec_.push_back(Tic_ * Ex_c0);
-            Ex_vec_.push_back(Tic_ * Ex_c1);
-            Ex_vec_.push_back(Tic_ * Ex_c2);
-            Ex_vec_.push_back(Tic_ * Ex_c3);
+            Ex_vec_.push_back(Ex_c0);
+            Ex_vec_.push_back(Ex_c1);
+            Ex_vec_.push_back(Ex_c2);
+            Ex_vec_.push_back(Ex_c3);
 
             m_camera0 = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(
                     ros::package::getPath("rgbd_inertial_slam") + "/config/cam0_mei.yaml");
@@ -220,28 +288,22 @@ namespace rgbd_inertial_slam {
             m_camera_vec.push_back(m_camera1);
             m_camera_vec.push_back(m_camera2);
             m_camera_vec.push_back(m_camera3);
-        }
 
-        void load_csv(std::string file_path, std::map<double, Eigen::Matrix4d> &pose_map, std::vector<double> &time_vec) {
-            FILE *pFile = fopen(file_path.c_str(), "r");
-            if (pFile == NULL) {
-                std::cout << "file not found" << std::endl;
-                return;
+            r3live_path_ = config_node_["r3live_path"].as<std::string>();
+            std::string seq_name = r3live_path_.substr(r3live_path_.find_last_of("/") + 1);
+            std::string base_dir = r3live_path_ + '/' + seq_name;
+            r3_omni_depth_path_ = base_dir + "/omni_depth";
+            FileManager::CreateDirectory(r3_omni_depth_path_);
+            for (int i = 0; i < 4; i++) {
+                r3_image_paths.push_back(base_dir + "/cam" + std::to_string(i + 1) + "/image");
+                r3_depth_paths.push_back(base_dir + "/cam" + std::to_string(i + 1) + "/depth");
+                r3_depth_vis_paths.push_back(base_dir + "/cam" + std::to_string(i + 1) + "/depth_vis");
+                r3_dep_rgb_path_.push_back(base_dir + "/cam" + std::to_string(i + 1) + "/dep_rgb");
+                FileManager::CreateDirectory(r3_image_paths[i]);
+                FileManager::CreateDirectory(r3_depth_paths[i]);
+                FileManager::CreateDirectory(r3_depth_vis_paths[i]);
+                FileManager::CreateDirectory(r3_dep_rgb_path_[i]);
             }
-            double time_stamp, x, y, z, qx, qy, qz, qw;
-            while (fscanf(pFile, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,", &time_stamp,
-                          &x, &y, &z, &qw, &qx, &qy, &qz) != EOF) {
-                Eigen::Quaterniond q(qw, qx, qy, qz);
-                Eigen::Vector3d t(x, y, z);
-                Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
-                pose.block<3, 3>(0, 0) = q.toRotationMatrix();
-                pose.block<3, 1>(0, 3) = t;
-                double time_sec = time_stamp / 1e9;
-                pose_map.insert(std::make_pair(time_sec, pose));
-                time_vec.push_back(time_sec);
-            }
-            fclose(pFile);
-            sort(time_vec.begin(), time_vec.end());
         }
 
         void InitBag() {
@@ -260,14 +322,21 @@ namespace rgbd_inertial_slam {
             topics_.push_back(fisheye_topic_);
             topics_.push_back(depth_topic_);
             topics_.push_back(rs_rgb_topic_);
+
             view_ = std::make_shared<rosbag::View>(bag_, rosbag::TopicQuery(topics_));
-//            view_ = std::make_shared<rosbag::View>(bag_);
+            if (debug_) {
+                ros::Time start_time = view_->getBeginTime() + ros::Duration(10.0);
+                ros::Time end_time = start_time + ros::Duration(1.0);
+                view_ = std::make_shared<rosbag::View>(bag_, rosbag::TopicQuery(topics_), start_time, end_time);
+            }
 
             gt_dataset_path_ = config_node_["ground_truth_path"].as<std::string>();
             omni_path_ = gt_dataset_path_ + bag_name + "/omni";
             rs_dep_rgb_path_ = gt_dataset_path_ + bag_name + "/rs_dep_rgb";
+            points_path_ = gt_dataset_path_ + bag_name + "/benchmark_realworld";
             FileManager::CreateDirectory(omni_path_);
             FileManager::CreateDirectory(rs_dep_rgb_path_);
+            FileManager::CreateDirectory(points_path_);
             for (int i = 0; i < 4; i++) {
                 image_paths.push_back(gt_dataset_path_ + bag_name + "/cam" + std::to_string(i + 1) + "/image");
                 depth_paths.push_back(gt_dataset_path_ + bag_name + "/cam" + std::to_string(i + 1) + "/depth");
@@ -276,6 +345,110 @@ namespace rgbd_inertial_slam {
                 FileManager::CreateDirectory(depth_paths[i]);
                 FileManager::CreateDirectory(dep_rgb_path_[i]);
             }
+        }
+
+        void ReGenMap() {
+            rosbag::View::iterator view_it = view_->begin(); //使用迭代器的方式遍历
+            bool first_frame = true;
+            std::ofstream fout;
+            FileManager::CreateFile(fout, points_path_ + "/alidarPose.csv");
+            int frame_count = 0;
+            Eigen::Matrix4d T_init = Eigen::Matrix4d::Identity();
+            pcl::PointCloud<PointType>::Ptr global_map_ptr(new pcl::PointCloud<PointType>());
+            while (view_it != view_->end()) {
+                auto m = *view_it;
+                std::string cur_topic = m.getTopic();
+                //interpolate pose
+                double cur_time = m.getTime().toSec();
+                Eigen::Matrix4d cur_Twc = Eigen::Matrix4d::Identity();
+                auto it = lower_bound(time_vec_.begin(), time_vec_.end(), cur_time);
+                bool pose_available = false;
+                if (it != time_vec_.end() && it != time_vec_.begin()) {
+                    double upper_t = *it;
+                    double lower_t = *(it - 1);
+                    if (abs(upper_t - lower_t) < 1.0) {
+                        pose_available = true;
+                        double ratio = (cur_time - lower_t) / (upper_t - lower_t);
+                        cur_Twc = InterpolatePose(pose_map_[lower_t], pose_map_[upper_t], ratio);
+                    }
+                }
+                if (cur_topic == depth_topic_ && pose_available) {
+                    sensor_msgs::ImageConstPtr img_msg = m.instantiate<sensor_msgs::Image>();
+                    cv::Mat depth = GetDepthFromImage(img_msg, depth_scale_);
+                    pcl::PointCloud<PointType>::Ptr tmp_map_ptr_(new pcl::PointCloud<PointType>());
+                    Depth2Points(depth, tmp_map_ptr_, m_rgbd_model_);
+                    if (first_frame) {
+                        pcl::transformPointCloud(*tmp_map_ptr_, *map_ptr_, cur_Twc);
+                        T_init = cur_Twc;
+                        first_frame = false;
+                    }
+                    pcl::io::savePCDFileASCII(points_path_ + "/full" + std::to_string(frame_count++) + ".pcd",
+                                              *tmp_map_ptr_);
+                    Eigen::Matrix4d T_cur = EigenIsoInv(T_init) * cur_Twc;
+                    for (int i = 0; i < 4; ++i) {
+                        fout << T_cur(i, 0) << "," << T_cur(i, 1) << "," << T_cur(i, 2) << "," << T_cur(i, 3) << ",\n";
+                    }
+                    LOG(INFO) << "T_cur: \n" << T_cur;
+                    pcl::transformPointCloud(*tmp_map_ptr_, *tmp_map_ptr_, T_cur);
+                    *global_map_ptr = *global_map_ptr + *tmp_map_ptr_;
+                }
+                view_it++;
+            }
+            pcl::io::savePCDFileASCII(points_path_ + "/full.pcd", *global_map_ptr);
+            fout.close();
+        }
+
+        void TravelBag() {
+            rosbag::View::iterator view_it = view_->begin(); //使用迭代器的方式遍历
+            while (view_it != view_->end()) {
+                auto m = *view_it;
+                std::string cur_topic = m.getTopic();
+                //interpolate pose
+                double cur_time = m.getTime().toSec();
+                Eigen::Matrix4d cur_Twc = Eigen::Matrix4d::Identity();
+                auto it = lower_bound(time_vec_.begin(), time_vec_.end(), cur_time);
+                bool pose_available = false;
+                if (it != time_vec_.end() && it != time_vec_.begin()) {
+                    double upper_t = *it;
+                    double lower_t = *(it - 1);
+                    if (abs(upper_t - lower_t) < 1.0) {
+                        pose_available = true;
+                        double ratio = (cur_time - lower_t) / (upper_t - lower_t);
+                        cur_Twc = InterpolatePose(pose_map_[lower_t], pose_map_[upper_t], ratio);
+                    }
+                }
+
+                if (cur_topic == fisheye_topic_ && pose_available) {
+                    if (it != time_vec_.end() && it != time_vec_.begin()) {
+                        std::vector<cv::Mat> img_vec;
+                        std::vector<cv::Mat> dep_vec;
+                        sensor_msgs::CompressedImageConstPtr img_msg = m.instantiate<sensor_msgs::CompressedImage>();
+                        SaveIndividualImage(img_msg, cur_time, img_vec);
+                        SaveOmniImage(cur_Twc, cur_time, 0.5625, 0.5625);
+                        LOG(INFO) << std::fixed << "Write image at " << cur_time;
+
+                        if (debug_) {
+                            SaveIndividualDepth(cur_Twc, cur_time, dep_vec);
+                            SaveRGBWithDepth(img_vec, dep_vec, cur_time);
+                            ReProjectUsingOmni(cur_Twc, cur_time);
+                        }
+                    }
+                }
+                if (cur_topic == rs_rgb_topic_ && debug_ && pose_available) {
+                    cv::Mat rgb_img;
+                    if (cur_topic.find("compressed") != std::string::npos) {
+                        sensor_msgs::CompressedImagePtr img_msg = m.instantiate<sensor_msgs::CompressedImage>();
+                        rgb_img = GetImageFromCompressed(img_msg);
+                    } else {
+                        sensor_msgs::ImageConstPtr img_msg = m.instantiate<sensor_msgs::Image>();
+                        rgb_img = GetImageFromImage(img_msg);
+                    }
+                    SaveRsRGBWithDepth(rgb_img, cur_time, cur_Twc);
+                }
+
+                view_it++;
+            }
+            bag_.close();
         }
 
         void SplitImageHorizon(const cv::Mat &img, std::vector<cv::Mat> &img_vec) {
@@ -287,14 +460,15 @@ namespace rgbd_inertial_slam {
             }
         }
 
-        void SaveIndividualDepth(const Eigen::Matrix4d &cur_pose, const double &cur_time, std::vector<cv::Mat> &dep_vec) {
+        void
+        SaveIndividualDepth(const Eigen::Matrix4d &cur_Twc, const double &cur_time, std::vector<cv::Mat> &dep_vec) {
             for (int idx = 0; idx < 4; ++idx) {
                 cv::Mat depth_map = cv::Mat::zeros(m_camera_vec[idx]->imageHeight(),
                                                    m_camera_vec[idx]->imageWidth(), CV_32FC1);
 
-                Eigen::Matrix4d Twf = cur_pose * Ex_vec_[idx];
+                Eigen::Matrix4d Twf = cur_Twc * Ex_vec_[idx];
                 Eigen::Matrix4d Tfw = EigenIsoInv(Twf);
-                pcl::PointCloud<pcl::PointXYZ>::Ptr fisheye_map_ptr(new pcl::PointCloud<pcl::PointXYZ>());
+                pcl::PointCloud<PointType>::Ptr fisheye_map_ptr(new pcl::PointCloud<PointType>());
                 pcl::transformPointCloud(*map_ptr_, *fisheye_map_ptr, Tfw);
                 for (int i = 0; i < fisheye_map_ptr->points.size(); ++i) {
                     Eigen::Vector3d p_cam = fisheye_map_ptr->points[i].getVector3fMap().cast<double>();
@@ -335,18 +509,18 @@ namespace rgbd_inertial_slam {
             }
         }
 
-        void ReProjectUsingOmni(const Eigen::Matrix4d &cur_pose, const double &cur_time) {
+        void ReProjectUsingOmni(const Eigen::Matrix4d &cur_Twc, const double &cur_time) {
 
-            Eigen::Matrix4d Twf = cur_pose * Ex_vec_[0];
+            Eigen::Matrix4d Twf = cur_Twc * Ex_vec_[0];
 //          LOG(INFO) << "tmp_omni_ptr_ first point: " << tmp_omni_ptr_->points[0].x << " " << tmp_omni_ptr_->points[0].y << " " << tmp_omni_ptr_->points[0].z;
             pcl::transformPointCloud(*tmp_omni_ptr_, *tmp_omni_ptr_, Twf); //转到世界坐标系
             for (int idx = 0; idx < 4; ++idx) {
                 cv::Mat depth_map = cv::Mat::zeros(m_camera_vec[idx]->imageHeight(),
                                                    m_camera_vec[idx]->imageWidth(), CV_32FC1);
 
-                Eigen::Matrix4d Twf_idx = cur_pose * Ex_vec_[idx];
+                Eigen::Matrix4d Twf_idx = cur_Twc * Ex_vec_[idx];
                 Eigen::Matrix4d Tfw = EigenIsoInv(Twf_idx);
-                pcl::PointCloud<pcl::PointXYZ>::Ptr fisheye_map_ptr(new pcl::PointCloud<pcl::PointXYZ>());
+                pcl::PointCloud<PointType>::Ptr fisheye_map_ptr(new pcl::PointCloud<PointType>());
                 pcl::transformPointCloud(*tmp_omni_ptr_, *fisheye_map_ptr, Tfw);
 //              LOG(INFO) << "idx: " << idx << ", trans mat: \n" << Tfw * Twf;
 //              LOG(INFO) << "fisheye_map_ptr first point: " << fisheye_map_ptr->points[0].x << " " << fisheye_map_ptr->points[0].y << " " << fisheye_map_ptr->points[0].z;
@@ -372,14 +546,13 @@ namespace rgbd_inertial_slam {
             }
         }
 
-        void SaveRsRGBWithDepth(const cv::Mat &rs_rgb_img, const double &cur_time, const Eigen::Matrix4d &cur_pose) {
-            Eigen::Matrix4d Twf = cur_pose;
-            Eigen::Matrix4d Tfw = EigenIsoInv(Twf);
-            pcl::PointCloud<pcl::PointXYZ>::Ptr fisheye_map_ptr(new pcl::PointCloud<pcl::PointXYZ>());
-            pcl::transformPointCloud(*map_ptr_, *fisheye_map_ptr, Tfw);
+        void SaveRsRGBWithDepth(const cv::Mat &rs_rgb_img, const double &cur_time, const Eigen::Matrix4d &cur_Twc) {
+            Eigen::Matrix4d Twc = cur_Twc;
+            pcl::PointCloud<PointType>::Ptr rs_map_ptr(new pcl::PointCloud<PointType>());
+            pcl::transformPointCloud(*map_ptr_, *rs_map_ptr, EigenIsoInv(Twc));
             cv::Mat depth_map = cv::Mat::zeros(rs_rgb_img.rows, rs_rgb_img.cols, CV_32FC1);
-            for (int i = 0; i < fisheye_map_ptr->points.size(); ++i) {
-                Eigen::Vector3d p_cam(fisheye_map_ptr->points[i].x, fisheye_map_ptr->points[i].y, fisheye_map_ptr->points[i].z);
+            for (int i = 0; i < rs_map_ptr->points.size(); ++i) {
+                Eigen::Vector3d p_cam(rs_map_ptr->points[i].x, rs_map_ptr->points[i].y, rs_map_ptr->points[i].z);
                 if (p_cam(2) > 0.1) {
                     Eigen::Vector2d px;
                     m_rgbd_model_->spaceToPlane(p_cam, px);
@@ -399,7 +572,8 @@ namespace rgbd_inertial_slam {
             cv::imwrite(rs_dep_rgb_path_ + "/aligned_" + std::to_string(cur_time) + ".png", merge_img);
         }
 
-        void SaveIndividualImage(const sensor_msgs::CompressedImageConstPtr &img_msg, const double &cur_time, std::vector<cv::Mat> &img_vec) {
+        void SaveIndividualImage(const sensor_msgs::CompressedImageConstPtr &img_msg, const double &cur_time,
+                                 std::vector<cv::Mat> &img_vec) {
             cv::Mat img = GetImageFromCompressed(img_msg);
             SplitImageHorizon(img, img_vec);
             for (int idx = 0; idx < 4; ++idx) {
@@ -412,13 +586,13 @@ namespace rgbd_inertial_slam {
             }
         }
 
-        void SaveOmniImage(const Eigen::Matrix4d &cur_pose, const double &cur_time, const double &height_res,
+        void SaveOmniImage(const Eigen::Matrix4d &cur_Twc, const double &cur_time, const double &height_res,
                            const double &width_res) {
 //            omni_path_
             // regard the fisheye image 0 as the omni image
-            Eigen::Matrix4d Twf = cur_pose * Ex_vec_[0];
+            Eigen::Matrix4d Twf = cur_Twc * Ex_vec_[0];
             Eigen::Matrix4d Tfw = EigenIsoInv(Twf);
-            pcl::PointCloud<pcl::PointXYZ>::Ptr fisheye_map_ptr(new pcl::PointCloud<pcl::PointXYZ>());
+            pcl::PointCloud<PointType>::Ptr fisheye_map_ptr(new pcl::PointCloud<PointType>());
             pcl::transformPointCloud(*map_ptr_, *fisheye_map_ptr, Tfw);
             cv::Mat depth_map = cv::Mat::zeros(180.0 / height_res, 360.0 / width_res, CV_32FC1);
 
@@ -427,7 +601,7 @@ namespace rgbd_inertial_slam {
                 index[i] = i;
             }
 
-            tmp_omni_ptr_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+            tmp_omni_ptr_.reset(new pcl::PointCloud<PointType>());
             std::for_each(std::execution::par_unseq, index.begin(), index.end(),
                           [&fisheye_map_ptr, &depth_map, &height_res, &width_res, this](size_t idx) {
                               Eigen::Vector3d p_cam(fisheye_map_ptr->points[idx].x, fisheye_map_ptr->points[idx].y,
@@ -443,8 +617,8 @@ namespace rgbd_inertial_slam {
                                   if (debug_)
                                       r = r * 1000;
                                   if (depth_map.at<float>(row, col) == 0 || depth_map.at<float>(row, col) > r) {
-                                      if(debug_) {
-                                          pcl::PointXYZ p;
+                                      if (debug_) {
+                                          PointType p;
                                           theta = row * height_res * M_PI / 180.0 - M_PI / 2.0;
                                           phi = col * width_res * M_PI / 180.0 - M_PI;
                                           p.x = r * cos(theta) * cos(phi) / 1000.0;
@@ -469,14 +643,49 @@ namespace rgbd_inertial_slam {
                 cv::imwrite(omni_path_ + "/" + std::to_string(cur_time) + ".tiff", depth_map);
         }
 
-//        bool InFov(Eigen::Vector3d &p_cam) {
-//            double theta = atan2(p_cam(1), p_cam(0));
-//            double phi = atan2(p_cam(2), p_cam(0));
-//            if (theta > fov_h_ / 2.0 || theta < -fov_h_ / 2.0 || phi > fov_v_ / 2.0 || phi < -fov_v_ / 2.0){
-//                return false;
-//            }
-//            return true;
-//        }
+        void
+        load_csv(std::string file_path, std::map<double, Eigen::Matrix4d> &pose_map, std::vector<double> &time_vec) {
+            FILE *pFile = fopen(file_path.c_str(), "r");
+            if (pFile == NULL) {
+                std::cout << "file not found" << std::endl;
+                return;
+            }
+            double time_stamp, x, y, z, qx, qy, qz, qw;
+            while (fscanf(pFile, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,", &time_stamp,
+                          &x, &y, &z, &qw, &qx, &qy, &qz) != EOF) {
+                Eigen::Quaterniond q(qw, qx, qy, qz);
+                Eigen::Vector3d t(x, y, z);
+                Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
+                pose.block<3, 3>(0, 0) = q.toRotationMatrix();
+                pose.block<3, 1>(0, 3) = t;
+                double time_sec = time_stamp / 1e9;
+                pose_map.insert(std::make_pair(time_sec, pose));
+                time_vec.push_back(time_sec);
+            }
+            fclose(pFile);
+            sort(time_vec.begin(), time_vec.end());
+        }
+
+        void load_csv_r3live(std::string file_path,
+                             std::vector<Eigen::Matrix4d, Eigen::aligned_allocator<Eigen::Matrix4d>> &pose_map) {
+            FILE *pFile = fopen(file_path.c_str(), "r");
+            if (pFile == NULL) {
+                std::cout << "file not found" << std::endl;
+                return;
+            }
+            double time_stamp, x, y, z, qx, qy, qz, qw;
+            while (fscanf(pFile, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,", &time_stamp,
+                          &x, &y, &z, &qw, &qx, &qy, &qz) != EOF) {
+                Eigen::Quaterniond q(qw, qx, qy, qz);
+                Eigen::Vector3d t(x, y, z);
+                Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
+                pose.block<3, 3>(0, 0) = q.toRotationMatrix();
+                pose.block<3, 1>(0, 3) = t;
+//                LOG(INFO) << pose.block<3, 1>(0, 3).transpose();
+                pose_map.push_back(pose);
+            }
+            fclose(pFile);
+        }
     };
 }
 

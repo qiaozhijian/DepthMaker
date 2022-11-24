@@ -95,7 +95,7 @@ def visualize_pcds(pcds_list, axis_marker = True):
             pcd.paint_uniform_color(colors_list[i%num])
         pcds.append(pcd)
     if axis_marker:
-        axis_marker = o3d.geometry.TriangleMesh.create_coordinate_frame(size=15, origin=[0, 0, 0])
+        axis_marker = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5, origin=[0, 0, 0])
         pcds.append(axis_marker)
     o3d.visualization.draw_geometries(pcds)
 
