@@ -1,12 +1,12 @@
 lidar_topic: /livox/lidar
 map_topic: /global_points
 debug: True
-use_map: False
+use_map: True
 
-vins_path: "/media/qzj/Dataset/code/catkin/catkin_roadslam/src/RGBD-Inertial/vins_outputs/results-project_2022-11-23-14-33-57"
+vins_path: "/media/qzj/Dataset/code/catkin/catkin_roadslam/src/RGBD-Inertial/vins_outputs/results-project_2022-11-18-00-02-32"
 ground_truth_path: "/media/qzj/Extreme SSD/datasets/CV_Project/omni_depth/"
-bag_path: "/media/qzj/Extreme SSD/datasets/CV_Project/trainning_data/project_2022-11-23-14-33-57.bag"
-r3live_path: "/media/qzj/Extreme SSD/datasets/CV_Project/r3live/hkust_campus_seq_02"
+bag_path: "/media/qzj/Extreme SSD/datasets/CV_Project/trainning_data/project_2022-11-18-00-02-32.bag"
+r3live_path: "/media/qzj/Extreme SSD/datasets/CV_Project/r3live/hkust_campus_seq_00"
 
 fisheye_topic: /arducam/image/compressed
 depth_topic: /camera/aligned_depth_to_color/image_raw

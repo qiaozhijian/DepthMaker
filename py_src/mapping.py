@@ -107,6 +107,12 @@ class Mapping:
         map_points = np.asarray(self.global_map.points)
         self.pub_cloud.publish_cloud_xyz(map_points, rospy.Time.now())
 
+    def fetch_image(self, t=1668267872.589593):
+        # t: timestamp
+        # return: depth, color
+        depth, color = self.bag_reader.get_depth_color(t)
+        return depth, color
+
     def mapping(self):
         topics = ["/camera/aligned_depth_to_color/image_raw"]
         pose_times = sorted(self.cam_poses.keys())

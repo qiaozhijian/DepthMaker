@@ -14,6 +14,7 @@ import open3d as o3d
 from tqdm import tqdm
 from sensor_msgs.point_cloud2 import PointCloud2
 from sensor_msgs.msg import CompressedImage, Image
+import rosbag
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_DIR)
@@ -36,22 +37,17 @@ def main():
 
     mapping = Mapping()
 
-    mapping.mapping()
+    # mapping.mapping()
+    mapping.fetch_image(t = 1668267872.589593)
 
 if __name__ == '__main__':
 
-    xi, gamma1, gamma2, u0, v0 = 2.1082393261265553, 681.36801238322040, 681.65546755284, 388.92002493499103, 256.82920934103737
-
-    x, y, z = 1, 2, 5
-    x0 = x / (np.sqrt(x**2 + y**2 + z**2) + xi)
-    y0 = y / (np.sqrt(x**2 + y**2 + z**2) + xi)
-
-    print(x, y, z)
-
-    x = x0
-    y = y0
-    rho2_d = x0**2 + y0**2
-    z = 1 - xi * (rho2_d + 1) / (np.sqrt(1 + rho2_d*(1 - xi**2)) + xi)
-    print(x, y, z)
-
+    bag = rosbag.Bag("/media/qzj/Extreme SSD/datasets/CV_Project/trainning_data/project_2022-11-12-23-44-15.bag", 'r')
+    for topic, msg, t in bag.read_messages(topics=['/camera/color/image_raw/compressed']):
+        time_sec = float("%.6f" %  msg.header.stamp.to_sec())
+        if time_sec > 1668267872.589593 - 0.01 and time_sec < 1668267872.589593 + 0.01:
+            print(time_sec)
+            rgb = np.array(imgmsg_to_pil(msg))
+            cv2.imwrite("test.png", rgb)
+            cv2.waitKey()
     # main()

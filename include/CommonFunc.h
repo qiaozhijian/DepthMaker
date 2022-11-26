@@ -21,6 +21,7 @@
 #include "camodocal/camera_models/CameraFactory.h"
 #include "camodocal/camera_models/CataCamera.h"
 #include "camodocal/camera_models/PinholeCamera.h"
+#include "glog/logging.h"
 
 namespace rgbd_inertial_slam {
 

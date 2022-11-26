@@ -35,7 +35,7 @@ namespace rgbd_inertial_slam {
     private:
 
         std::string fisheye_topic_, depth_topic_, rs_rgb_topic_;
-        std::string vins_path_, gt_dataset_path_, omni_path_, rs_dep_rgb_path_, points_path_, r3live_path_, r3_omni_depth_path_;
+        std::string vins_path_, gt_dataset_path_, omni_path_, rs_dep_rgb_path_, points_path_, r3live_path_, r3_omni_depth_path_, r3_vis_path_;
         std::vector<std::string> image_paths, depth_paths, dep_rgb_path_;
         std::vector<std::string> r3_image_paths, r3_depth_paths, r3_depth_vis_paths, r3_dep_rgb_path_;
         std::vector<Eigen::Matrix4d, Eigen::aligned_allocator<Eigen::Matrix4d>> Ex_vec_;
@@ -75,14 +75,14 @@ namespace rgbd_inertial_slam {
 
             LoadParameters();
 
-//            InitBag();
+            InitBag();
 
-            GenVirtualDataset();
-//            if(!use_map_ && debug_){
-//                ReGenMap();
-//            }
+//            GenVirtualDataset();
+            if(!use_map_ && debug_){
+                ReGenMap();
+            }
 //
-//            TravelBag();
+            TravelBag();
         }
 
         // subscriber
@@ -193,6 +193,9 @@ namespace rgbd_inertial_slam {
                         cv::Mat merge_img = cv::Mat::zeros(rgb.rows, rgb.cols, CV_8UC3);
                         MergeDepthRGB(depth, rgb, merge_img);
                         cv::imwrite(r3_dep_rgb_path_[j] + "/" + i_s + ".png", merge_img);
+//                        for visualization
+                        cv::imwrite(r3_vis_path_ + "/" + i_s + "_rgb_cam" + std::to_string(j) + ".png", rgb);
+                        cv::imwrite(r3_vis_path_ + "/" + i_s + "_dep_cam" + std::to_string(j) + ".png", depth * 10);
                     }
                 }
                 cv::imwrite(r3_omni_depth_path_ + "/" + i_s + ".tiff", omni_depth_);
@@ -309,7 +312,9 @@ namespace rgbd_inertial_slam {
             std::string seq_name = r3live_path_.substr(r3live_path_.find_last_of("/") + 1);
             std::string base_dir = r3live_path_ + '/' + seq_name;
             r3_omni_depth_path_ = base_dir + "/omni_depth";
+            r3_vis_path_ = base_dir + "/vis";
             FileManager::CreateDirectory(r3_omni_depth_path_);
+            FileManager::CreateDirectory(r3_vis_path_);
             for (int i = 0; i < 4; i++) {
                 r3_image_paths.push_back(base_dir + "/cam" + std::to_string(i + 1) + "/image");
                 r3_depth_paths.push_back(base_dir + "/cam" + std::to_string(i + 1) + "/depth");
@@ -437,13 +442,13 @@ namespace rgbd_inertial_slam {
                 if (cur_topic == fisheye_topic_ && pose_available) {
                     if (it != time_vec_.end() && it != time_vec_.begin()) {
                         std::vector<cv::Mat> img_vec;
-                        std::vector<cv::Mat> dep_vec;
                         sensor_msgs::CompressedImageConstPtr img_msg = m.instantiate<sensor_msgs::CompressedImage>();
                         SaveIndividualImage(img_msg, cur_time, img_vec);
                         SaveOmniImage(cur_Twc, cur_time, 0.5625, 0.5625);
                         LOG(INFO) << std::fixed << "Write image at " << cur_time;
 
                         if (debug_) {
+                            std::vector<cv::Mat> dep_vec;
                             SaveIndividualDepth(cur_Twc, cur_time, dep_vec);
                             SaveRGBWithDepth(img_vec, dep_vec, cur_time);
                             ReProjectUsingOmni(cur_Twc, cur_time);
@@ -503,10 +508,12 @@ namespace rgbd_inertial_slam {
                     }
                 }
 
-                dep_vec.push_back(depth_map);
                 if (debug_) {
-                    cv::imwrite(depth_paths[idx] + "/" + std::to_string(cur_time) + ".png", depth_map);
-                    cv::imwrite(depth_paths[idx] + "/" + std::to_string(cur_time) + ".tiff", depth_map);
+                    cv::rotate(depth_map, depth_map, cv::ROTATE_180);
+                    dep_vec.push_back(depth_map);
+                    cv::Mat dep_8u;
+                    cv::normalize(depth_map, dep_8u, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+                    cv::imwrite(depth_paths[idx] + "/" + std::to_string(cur_time) + ".png", dep_8u);
                 } else
                     cv::imwrite(depth_paths[idx] + "/" + std::to_string(cur_time) + ".tiff", depth_map);
             }
@@ -520,7 +527,6 @@ namespace rgbd_inertial_slam {
 
                 cv::Mat merge_img = cv::Mat::zeros(img.rows, img.cols, CV_8UC3);
                 MergeDepthRGB(dep, img, merge_img);
-                cv::rotate(merge_img, merge_img, cv::ROTATE_180);
                 cv::imwrite(dep_rgb_path_[idx] + "/aligned_" + std::to_string(cur_time) + ".png", merge_img);
             }
         }
@@ -557,8 +563,8 @@ namespace rgbd_inertial_slam {
                         }
                     }
                 }
+                cv::rotate(depth_map, depth_map, cv::ROTATE_180);
                 cv::imwrite(depth_paths[idx] + "/" + std::to_string(cur_time) + "_re.png", depth_map);
-                cv::imwrite(depth_paths[idx] + "/" + std::to_string(cur_time) + "_re.tiff", depth_map);
             }
         }
 
@@ -585,15 +591,21 @@ namespace rgbd_inertial_slam {
             }
             cv::Mat merge_img = cv::Mat::zeros(rs_rgb_img.rows, rs_rgb_img.cols, CV_8UC3);
             MergeDepthRGB(depth_map, rs_rgb_img, merge_img);
+            cv::rotate(merge_img, merge_img, cv::ROTATE_180);
             cv::imwrite(rs_dep_rgb_path_ + "/aligned_" + std::to_string(cur_time) + ".png", merge_img);
         }
 
         void SaveIndividualImage(const sensor_msgs::CompressedImageConstPtr &img_msg, const double &cur_time,
                                  std::vector<cv::Mat> &img_vec) {
             cv::Mat img = GetImageFromCompressed(img_msg);
-            SplitImageHorizon(img, img_vec);
+            std::vector<cv::Mat> img_vec_tmp;
+            SplitImageHorizon(img, img_vec_tmp);
             for (int idx = 0; idx < 4; ++idx) {
-                cv::Mat img_i = img_vec[idx];
+                cv::Mat img_i = img_vec_tmp[idx];
+                if (debug_)
+                    cv::rotate(img_i, img_i, cv::ROTATE_180);
+                cv::resize(img_i, img_i, cv::Size(m_camera_vec[idx]->imageWidth(), m_camera_vec[idx]->imageHeight()));
+                img_vec.push_back(img_i);
                 cv::imwrite(image_paths[idx] + "/" + std::to_string(cur_time) + ".png", img_i);
 #if 0
                 cv::imshow("img_i", img_i);
@@ -652,7 +664,7 @@ namespace rgbd_inertial_slam {
                               }
                           });
             if (debug_) {
-//                LOG(INFO) << "row: " << 158 << " col: " << 371 << " r: " << depth_map.at<float>(158, 371);
+                cv::rotate(depth_map, depth_map, cv::ROTATE_180);
                 cv::imwrite(omni_path_ + "/" + std::to_string(cur_time) + ".png", depth_map);
                 cv::imwrite(omni_path_ + "/" + std::to_string(cur_time) + ".tiff", depth_map);
             } else
