@@ -3,6 +3,11 @@
 This is the ROS package of generating depth ground truth images from RGBD images and LiDAR point clouds. 
 
 To use this package, you need to install the following packages:
++ [OpenCV](https:://opencv.org)
++ [PCL](https://pointclouds.org/)
++ [ROS](http://wiki.ros.org/ROS/Installation)
++ [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page)
++ [camodocal](https://github.com/hengli/camodocal)
 + [VINS-Fusion](https://github.com/HKUST-Aerial-Robotics/VINS-Fusion)
 + [VINS-RGBD](https://github.com/STAR-Center/VINS-RGBD)
 + [R3LIVE](https://github.com/hku-mars/r3live)
