@@ -60,7 +60,7 @@ def visualize_points_list(points_list, extra_pcd = None, axis_marker = True):
         pcd.paint_uniform_color(colors_list[i%num])
         pcds.append(pcd)
     if axis_marker:
-        axis_marker = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5, origin=[0, 0, 0])
+        axis_marker = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
         pcds.append(axis_marker)
     if extra_pcd is not None:
         pcds.append(extra_pcd)
